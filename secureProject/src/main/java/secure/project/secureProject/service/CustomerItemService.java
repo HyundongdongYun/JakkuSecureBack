@@ -1,7 +1,6 @@
 package secure.project.secureProject.service;
 
 import lombok.RequiredArgsConstructor;
-import org.aspectj.weaver.ast.Or;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -9,14 +8,16 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import secure.project.secureProject.domain.*;
-import secure.project.secureProject.dto.reqeust.BasketAddItemRequestDto;
-import secure.project.secureProject.dto.reqeust.UserIdReqeustDto;
-import secure.project.secureProject.dto.reqeust.CustomerOrderItemRequestDto;
+import secure.project.secureProject.dto.request.BasketAddItemRequestDto;
+import secure.project.secureProject.dto.request.CustomerOrderItemRequestDto;
 import secure.project.secureProject.dto.response.*;
 import secure.project.secureProject.enums.OrderState;
 import secure.project.secureProject.exception.ApiException;
 import secure.project.secureProject.exception.ErrorDefine;
 import secure.project.secureProject.repository.*;
+import secure.project.secureProject.util.SecurityUtil;
+
+import secure.project.secureProject.validator.InputValidator;
 
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -34,8 +35,20 @@ public class CustomerItemService {
     private final BasketRepository basketRepository;
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
+    private final SecurityUtil securityUtil;
 
     public Map<String, Object> selectCustomerItem(Integer page, Integer size, String latest, String price,String searchName){
+        System.err.println(searchName);
+
+        if(searchName != null && InputValidator.lengthNotInRange(searchName, 0, 30)) {
+            throw new ApiException(ErrorDefine.INVALID_ARGUMENT);
+        }
+        if(searchName != null && InputValidator.containsAnySpecialCharacter(searchName)){
+            throw new ApiException(ErrorDefine.INVALID_ARGUMENT);
+        }
+
+        System.err.println("nono");
+
         Sort sort = Sort.by(
                 new Sort.Order(Sort.Direction.fromString(latest), "updateAt"),
                 new Sort.Order(Sort.Direction.fromString(price), "itemPrice")
@@ -70,13 +83,14 @@ public class CustomerItemService {
     }
 
     public Boolean addItemToBasket(BasketAddItemRequestDto basketAddItemRequestDto) {
-        User user = userRepository.findById(basketAddItemRequestDto.getUserId())
+        User user = userRepository.findByNickname(securityUtil.getCurrentUsername())
                 .orElseThrow( () -> new ApiException(ErrorDefine.USER_NOT_FOUND));
 
         Item item = customerItemRepository.findById(basketAddItemRequestDto.getItemId())
                 .orElseThrow(() -> new ApiException(ErrorDefine.ITEM_NOT_FOUND));
 
         if(basketRepository.existsByItemIdAndUserId(item, user)){
+            System.err.println("sadfasdfasdf");
             Basket basket = basketRepository.findByItemIdAndUserId(item, user)
                             .orElseThrow(()->new ApiException(ErrorDefine.BASKET_IS_EMPTY));
             basket.updateAdminItemAmount(basketAddItemRequestDto.getItemAmount());
@@ -91,8 +105,16 @@ public class CustomerItemService {
         return true;
     }
 
-    public Map<String, Object> selectBasketItem(UserIdReqeustDto basketRequestDto) {
-        User finduser = userRepository.findById(basketRequestDto.getUserId())
+    public Long selectUserPoint() {
+
+        User user = userRepository.findByNickname(securityUtil.getCurrentUsername())
+                .orElseThrow(() -> new ApiException(ErrorDefine.USER_NOT_FOUND));
+
+        return user.getPoint();
+    }
+
+    public Map<String, Object> selectBasketItem() {
+        User finduser = userRepository.findByNickname(securityUtil.getCurrentUsername())
                 .orElseThrow(()-> new ApiException(ErrorDefine.USER_NOT_FOUND));
 
         List<Basket> selectBasket = basketRepository.findBasketsByUserIdWithItem(finduser);
@@ -117,11 +139,11 @@ public class CustomerItemService {
         return result;
     }
 
-    public Boolean basketItemDelete(Long itemId, UserIdReqeustDto userIdReqeustDto) {
+    public Boolean basketItemDelete(Long itemId) {
         Item item = customerItemRepository.findById(itemId)
                 .orElseThrow(() -> new ApiException(ErrorDefine.ITEM_NOT_FOUND));
 
-        User user = userRepository.findById(userIdReqeustDto.getUserId())
+        User user = userRepository.findByNickname(securityUtil.getCurrentUsername())
                 .orElseThrow(() -> new ApiException(ErrorDefine.USER_NOT_FOUND));
 
         Basket basket = basketRepository.findByItemIdAndUserId(item, user)
@@ -132,7 +154,7 @@ public class CustomerItemService {
         return true;
     }
 
-    public Boolean paymentItem(Long userId, List<CustomerOrderItemRequestDto> customerOrderItemRequestDto) {
+    public Boolean paymentItem(List<CustomerOrderItemRequestDto> customerOrderItemRequestDto) {
         int totalPrice = 0;
         int totalAmount = 0;
 
@@ -142,9 +164,12 @@ public class CustomerItemService {
 
             totalPrice += item.getItemPrice() * customerOrderItemRequestDto1.getBuyItemAmount();
             totalAmount += customerOrderItemRequestDto1.getBuyItemAmount();
+            if(item.getItemAmount() < totalAmount)
+                throw new ApiException(ErrorDefine.OVER_ITEM_AMOUNT);
+            item.updateItemAmount(item.getItemAmount()-totalAmount);
         }
 
-        User user = userRepository.findById(userId)
+        User user = userRepository.findByNickname(securityUtil.getCurrentUsername())
                 .orElseThrow(() -> new ApiException(ErrorDefine.USER_NOT_FOUND));
         user.updatePoint(user.getPoint() - totalPrice);
 
@@ -175,8 +200,8 @@ public class CustomerItemService {
         return true;
     }
 
-    public Map<String, Object> selectHistroyItem(Integer page, Integer size, String latest, String status, UserIdReqeustDto userIdReqeustDto) {
-        User user1 = userRepository.findById(userIdReqeustDto.getUserId())
+    public Map<String, Object> selectHistroyItem(Integer page, Integer size, String latest, String status) {
+        User user1 = userRepository.findByNickname(securityUtil.getCurrentUsername())
                 .orElseThrow(() -> new ApiException(ErrorDefine.USER_NOT_FOUND));
 
         Sort sort = Sort.by(
@@ -185,7 +210,7 @@ public class CustomerItemService {
         );
 
         Pageable pageable = PageRequest.of(page,size,sort);
-        Page<Order> selectOrder = orderRepository.searchOrderListByUserId(pageable,user1);
+        Page<Order> selectOrder = orderRepository.searchOrderListByUserId(user1,pageable);
 
         PageInfo pageInfo = PageInfo.builder()
                 .currentPage(selectOrder.getNumber() + 1)
@@ -236,10 +261,10 @@ public class CustomerItemService {
         return result;
     }
 
-    public Boolean refundOrder(UserIdReqeustDto userIdReqeustDto, Long orderId) {
+    public Boolean refundOrder(Long orderId) {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ApiException(ErrorDefine.ORDER_NOT_FOUND));
-        User user = userRepository.findById(userIdReqeustDto.getUserId())
+        User user = userRepository.findByNickname(securityUtil.getCurrentUsername())
                 .orElseThrow(() -> new ApiException(ErrorDefine.USER_NOT_FOUND));
 
         List<OrderItem> deleteOrderItem = orderItemRepository.findByOrder(order);
@@ -247,7 +272,6 @@ public class CustomerItemService {
         if(deleteOrderItem.isEmpty())
             throw new ApiException(ErrorDefine.ORDER_NOT_FOUND);
 
-        orderItemRepository.deleteAll(deleteOrderItem);
         user.updatePoint(user.getPoint() + order.getOrderItemTotalPrice());
         order.updateOrderState(OrderState.REFUND);
 
